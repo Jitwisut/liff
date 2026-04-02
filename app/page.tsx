@@ -6,6 +6,7 @@ import liff from "@line/liff";
 interface UserProfile {
   displayName: string;
   pictureUrl?: string;
+  userId?: string;
 }
 
 export default function Home() {
@@ -19,48 +20,64 @@ export default function Home() {
 
   // --- 1. Init LIFF [ส่วนที่ 1 ของโจทย์] ---
   useEffect(() => {
+    let isTerminated = false;
     const initLiff = async () => {
       try {
         const liffId = process.env.NEXT_PUBLIC_LIFF_ID;
         if (!liffId) {
-          throw new Error(
-            "ยังไม่ได้ใส่ค่า NEXT_PUBLIC_LIFF_ID ใน Vercel หรือ .env.local",
-          );
+          throw new Error("ยังไม่ได้ใส่ค่า NEXT_PUBLIC_LIFF_ID");
         }
 
-        await liff.init({ liffId });
-
-        if (liff.isLoggedIn()) {
-          const userProfile = await liff.getProfile();
-          setProfile(userProfile as UserProfile);
-        } else {
-          // ถ้าเปิดใน Browser ให้ Login / ถ้าเปิดใน LINE จะข้ามไปดึง Profile เลย
-          liff.login();
-        }
-      } catch (err: any) {
+        // รอจนกว่า liff จะพร้อมทำงาน (ป้องกันการเรียก init ซ้ำใน StrictMode)
+        await liff.init({ liffId }).then(() => {
+          if (isTerminated) return;
+          if (liff.isLoggedIn()) {
+            return liff.getProfile().then(userProfile => setProfile(userProfile as UserProfile));
+          } else {
+            liff.login();
+          }
+        });
+      } catch (err) {
+        if (isTerminated) return;
         console.error("LIFF Init Error:", err);
-        setErrorMsg(err.message || "เกิดข้อผิดพลาดในการเชื่อมต่อ LINE");
+        const errorMessage = err instanceof Error ? err.message : "เกิดข้อผิดพลาดในการเชื่อมต่อ LINE";
+        setErrorMsg(errorMessage);
       } finally {
-        setIsLoading(false);
+        if (!isTerminated) {
+          setIsLoading(false);
+        }
       }
     };
 
+    // Make sure we only call init once or don't let broken state overwrite
     initLiff();
+    return () => { isTerminated = true; };
   }, []);
 
-  // --- 2. ฟังก์ชันถาม AI (เตรียมต่อ API ส่วนที่ 2) ---
+  // --- 2. ฟังก์ชันถาม AI (ต่อ API ส่วนที่ 2) ---
   const askAI = async () => {
     if (!question.trim()) return;
     setIsAsking(true);
 
     try {
-      // 📝 ตรงนี้คือจุดที่คุณต้องใช้ fetch() ยิงไปหา Backend API ของคุณในโจทย์ส่วนที่ 2
-      // ตอนนี้ผมทำ Mock (จำลอง) ให้มันหน่วงเวลา 1.5 วินาที แล้วตอบกลับมาก่อนครับ
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setAnswer(
-        `(จำลอง) นี่คือคำตอบจาก LINKS AI Assistant สำหรับคำถาม: "${question}" \n\n*หมายเหตุ: ต้องต่อ API กับ Claude/OpenAI ในส่วนที่ 2*`,
-      );
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: question,
+          userId: profile?.userId || ''
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to ask AI');
+      }
+
+      const data = await res.json();
+      setAnswer(data.answer || 'ไม่มีคำตอบจาก AI');
+
     } catch (err) {
+      console.error(err);
       alert("เกิดข้อผิดพลาดในการถาม AI");
     } finally {
       setIsAsking(false);
@@ -155,11 +172,10 @@ export default function Home() {
           <button
             onClick={askAI}
             disabled={isAsking || !question}
-            className={`w-full py-3 rounded-xl font-bold text-white shadow-md transition-all ${
-              isAsking || !question
+            className={`w-full py-3 rounded-xl font-bold text-white shadow-md transition-all ${isAsking || !question
                 ? "bg-gray-400"
                 : "bg-blue-600 hover:bg-blue-700"
-            }`}
+              }`}
           >
             {isAsking ? "กำลังประมวลผล..." : "ถาม AI"}
           </button>
